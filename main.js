@@ -68,17 +68,102 @@ class ImaEnhancedPastePlugin extends Plugin {
         return activeEditor.editor;
     }
 
-    isMarkdownEditorTarget(target) {
-        if (!(target instanceof HTMLElement)) {
+    getEventElements(event) {
+        const elements = [];
+
+        if (event && typeof event.composedPath === "function") {
+            for (const item of event.composedPath()) {
+                if (item instanceof Element) {
+                    elements.push(item);
+                }
+            }
+        }
+
+        if (event && event.target instanceof Element) {
+            elements.push(event.target);
+        }
+
+        if (document.activeElement instanceof Element) {
+            elements.push(document.activeElement);
+        }
+
+        return elements;
+    }
+
+    isInsideProperties(event) {
+        const elements = this.getEventElements(event);
+
+        const propertySelectors = [
+            ".metadata-container",
+            ".metadata-properties",
+            ".metadata-property",
+            ".metadata-property-key",
+            ".metadata-property-value",
+            ".metadata-input",
+            ".metadata-input-longtext",
+            ".metadata-property-value-content",
+            ".metadata-property-value-wrapper",
+            ".metadata-property-value-edit",
+            "[data-property-key]",
+            "[data-property-name]",
+            "[data-property-type]",
+            "[data-property-value]"
+        ];
+
+        const selector = propertySelectors.join(", ");
+
+        for (const element of elements) {
+            if (element.closest(selector)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    isTextInputTarget(event) {
+        const elements = this.getEventElements(event);
+
+        for (const element of elements) {
+            if (
+                element.matches(
+                    "input, textarea, select, button"
+                )
+            ) {
+                return true;
+            }
+
+            if (
+                element.closest(
+                    "input, textarea, select, button"
+                )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    isMarkdownEditorTarget(event) {
+        if (this.isInsideProperties(event)) {
             return false;
         }
 
-        if (target.closest("input, textarea, select, button")) {
+        if (this.isTextInputTarget(event)) {
+            return false;
+        }
+
+        const target = event ? event.target : null;
+
+        if (!(target instanceof Element)) {
             return false;
         }
 
         return Boolean(
-            target.closest(".cm-editor, .markdown-source-view, .markdown-preview-view")
+            target.closest(
+                ".cm-editor, .markdown-source-view, .markdown-preview-view"
+            )
         );
     }
 
@@ -91,7 +176,7 @@ class ImaEnhancedPastePlugin extends Plugin {
             return;
         }
 
-        if (!this.isMarkdownEditorTarget(event.target)) {
+        if (!this.isMarkdownEditorTarget(event)) {
             return;
         }
 
@@ -128,8 +213,14 @@ class ImaEnhancedPastePlugin extends Plugin {
 
             new Notice("已按 IMA 格式粘贴");
         } catch (error) {
-            console.error("IMA Enhanced Paste parsing failed:", error);
-            new Notice("IMA 内容解析失败，已使用普通粘贴");
+            console.error(
+                "IMA Enhanced Paste parsing failed:",
+                error
+            );
+
+            new Notice(
+                "IMA 内容解析失败，已使用普通粘贴"
+            );
         }
     }
 
@@ -141,29 +232,42 @@ class ImaEnhancedPastePlugin extends Plugin {
 
                 for (const item of clipboardItems) {
                     if (item.types.includes(IMA_MIME_TYPE)) {
-                        const blob = await item.getType(IMA_MIME_TYPE);
+                        const blob = await item.getType(
+                            IMA_MIME_TYPE
+                        );
+
                         encodedData = await blob.text();
                         break;
                     }
                 }
 
                 if (!encodedData) {
-                    new Notice("当前剪贴板中没有 IMA 内容");
+                    new Notice(
+                        "当前剪贴板中没有 IMA 内容"
+                    );
+
                     return;
                 }
 
                 const imaData = this.decodeImaData(encodedData);
-                const markdown = this.convertImaToMarkdown(imaData);
+                const markdown = this.convertImaToMarkdown(
+                    imaData
+                );
 
                 if (!markdown) {
                     throw new Error("IMA 内容为空");
                 }
 
                 editor.replaceSelection(markdown);
+
                 new Notice("已按 IMA 格式粘贴");
             })
             .catch((error) => {
-                console.error("IMA Enhanced Paste command failed:", error);
+                console.error(
+                    "IMA Enhanced Paste command failed:",
+                    error
+                );
+
                 new Notice("读取 IMA 剪贴板失败");
             });
     }
@@ -171,25 +275,11 @@ class ImaEnhancedPastePlugin extends Plugin {
     decodeImaData(encodedData) {
         let decodedText = encodedData;
 
-        /*
-         * IMA 当前提供的内容是：
-         *
-         * Base64
-         *   ↓
-         * URL 编码后的 JSON
-         *   ↓
-         * IMA 节点数组
-         *
-         * 因此这里先 Base64 解码，再 URL 解码。
-         */
-
         try {
-            decodedText = this.decodeBase64Utf8(decodedText);
+            decodedText = this.decodeBase64Utf8(
+                decodedText
+            );
         } catch (error) {
-            /*
-             * 如果未来 IMA 改成直接提供 URL 编码内容，
-             * 这里保留直接处理的可能性。
-             */
             decodedText = encodedData;
         }
 
@@ -198,7 +288,9 @@ class ImaEnhancedPastePlugin extends Plugin {
         const data = JSON.parse(decodedText);
 
         if (!Array.isArray(data)) {
-            throw new Error("IMA 数据不是节点数组");
+            throw new Error(
+                "IMA 数据不是节点数组"
+            );
         }
 
         return data;
@@ -228,11 +320,10 @@ class ImaEnhancedPastePlugin extends Plugin {
             blocks.push(block);
         }
 
-        /*
-         * IMA 有时会在末尾附带空段落。
-         * 删除末尾多余空行，但保留正文中间的空段落。
-         */
-        while (blocks.length > 0 && blocks[blocks.length - 1] === "") {
+        while (
+            blocks.length > 0 &&
+            blocks[blocks.length - 1] === ""
+        ) {
             blocks.pop();
         }
 
@@ -245,6 +336,7 @@ class ImaEnhancedPastePlugin extends Plugin {
         }
 
         const type = node.type || "p";
+
         const children = Array.isArray(node.children)
             ? node.children
             : [];
@@ -269,27 +361,39 @@ class ImaEnhancedPastePlugin extends Plugin {
             .join("");
 
         if (type === "h1") {
-            return "# " + this.removeLeadingHeadingMarks(content);
+            return "# " + this.removeLeadingHeadingMarks(
+                content
+            );
         }
 
         if (type === "h2") {
-            return "## " + this.removeLeadingHeadingMarks(content);
+            return "## " + this.removeLeadingHeadingMarks(
+                content
+            );
         }
 
         if (type === "h3") {
-            return "### " + this.removeLeadingHeadingMarks(content);
+            return "### " + this.removeLeadingHeadingMarks(
+                content
+            );
         }
 
         if (type === "h4") {
-            return "#### " + this.removeLeadingHeadingMarks(content);
+            return "#### " + this.removeLeadingHeadingMarks(
+                content
+            );
         }
 
         if (type === "h5") {
-            return "##### " + this.removeLeadingHeadingMarks(content);
+            return "##### " + this.removeLeadingHeadingMarks(
+                content
+            );
         }
 
         if (type === "h6") {
-            return "###### " + this.removeLeadingHeadingMarks(content);
+            return "###### " + this.removeLeadingHeadingMarks(
+                content
+            );
         }
 
         if (type === "blockquote") {
@@ -299,12 +403,12 @@ class ImaEnhancedPastePlugin extends Plugin {
                 .join("\n");
         }
 
-        if (type === "ul" || type === "ol") {
-            return content;
-        }
-
         if (type === "li") {
             return "- " + content;
+        }
+
+        if (type === "ul" || type === "ol") {
+            return content;
         }
 
         return content;
@@ -321,7 +425,7 @@ class ImaEnhancedPastePlugin extends Plugin {
                 : [];
 
             const label = children
-                .map((child) => this.renderInline(child, true))
+                .map((child) => this.renderInline(child))
                 .join("");
 
             const url = typeof node.url === "string"
@@ -332,7 +436,9 @@ class ImaEnhancedPastePlugin extends Plugin {
                 return label;
             }
 
-            return "[" + label + "](" + this.escapeLinkUrl(url) + ")";
+            return "[" + label + "](" +
+                this.escapeLinkUrl(url) +
+                ")";
         }
 
         if (Array.isArray(node.children)) {
@@ -347,10 +453,6 @@ class ImaEnhancedPastePlugin extends Plugin {
 
         let text = node.text;
 
-        /*
-         * 将 IMA 文本内部的换行转换成 Markdown 硬换行。
-         * 两个空格加换行可以确保 Obsidian 阅读模式显示换行。
-         */
         text = text.replace(/\r\n/g, "\n");
         text = text.replace(/\r/g, "\n");
         text = text.replace(/\n/g, "  \n");
