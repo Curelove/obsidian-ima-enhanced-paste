@@ -8,9 +8,7 @@ class ImaEnhancedPastePlugin extends Plugin {
         this.registerDomEvent(
             document,
             "paste",
-            (event) => {
-                this.handlePaste(event);
-            },
+            (event) => this.handlePaste(event),
             true
         );
 
@@ -92,9 +90,7 @@ class ImaEnhancedPastePlugin extends Plugin {
     }
 
     isInsideProperties(event) {
-        const elements = this.getEventElements(event);
-
-        const propertySelectors = [
+        const selectors = [
             ".metadata-container",
             ".metadata-properties",
             ".metadata-property",
@@ -109,41 +105,20 @@ class ImaEnhancedPastePlugin extends Plugin {
             "[data-property-name]",
             "[data-property-type]",
             "[data-property-value]"
-        ];
+        ].join(", ");
 
-        const selector = propertySelectors.join(", ");
-
-        for (const element of elements) {
-            if (element.closest(selector)) {
-                return true;
-            }
-        }
-
-        return false;
+        return this.getEventElements(event).some((element) => {
+            return Boolean(element.closest(selectors));
+        });
     }
 
     isTextInputTarget(event) {
-        const elements = this.getEventElements(event);
+        const selector = "input, textarea, select, button";
 
-        for (const element of elements) {
-            if (
-                element.matches(
-                    "input, textarea, select, button"
-                )
-            ) {
-                return true;
-            }
-
-            if (
-                element.closest(
-                    "input, textarea, select, button"
-                )
-            ) {
-                return true;
-            }
-        }
-
-        return false;
+        return this.getEventElements(event).some((element) => {
+            return element.matches(selector) ||
+                Boolean(element.closest(selector));
+        });
     }
 
     isMarkdownEditorTarget(event) {
@@ -169,15 +144,13 @@ class ImaEnhancedPastePlugin extends Plugin {
     }
 
     getInlineTitleElement(event) {
-        const elements = this.getEventElements(event);
-
         const selector = [
             ".inline-title",
             ".inline-title-input",
             "[data-inline-title]"
         ].join(", ");
 
-        for (const element of elements) {
+        for (const element of this.getEventElements(event)) {
             const titleElement = element.closest(selector);
 
             if (titleElement) {
@@ -193,11 +166,7 @@ class ImaEnhancedPastePlugin extends Plugin {
     }
 
     handlePaste(event) {
-        if (!event || event.defaultPrevented) {
-            return;
-        }
-
-        if (!event.clipboardData) {
+        if (!event || event.defaultPrevented || !event.clipboardData) {
             return;
         }
 
@@ -212,17 +181,13 @@ class ImaEnhancedPastePlugin extends Plugin {
             return;
         }
 
-        const types = Array.from(
-            event.clipboardData.types || []
-        );
+        const types = Array.from(event.clipboardData.types || []);
 
         if (!types.includes(IMA_MIME_TYPE)) {
             return;
         }
 
-        const encodedData = event.clipboardData.getData(
-            IMA_MIME_TYPE
-        );
+        const encodedData = event.clipboardData.getData(IMA_MIME_TYPE);
 
         if (!encodedData) {
             return;
@@ -247,29 +212,16 @@ class ImaEnhancedPastePlugin extends Plugin {
             to: editor.getCursor("to")
         };
 
-        this.pasteImaData(
-            encodedData,
-            editor,
-            selection
-        );
+        this.pasteImaData(encodedData, editor, selection);
     }
 
-    async pasteImaData(
-        encodedData,
-        editor,
-        selection
-    ) {
+    async pasteImaData(encodedData, editor, selection) {
         try {
-            this.imageCounter = 0;
             this.imageFailureCount = 0;
+            this.tableCount = 0;
 
-            const imaData = this.decodeImaData(
-                encodedData
-            );
-
-            const markdown = await this.convertImaToMarkdown(
-                imaData
-            );
+            const imaData = this.decodeImaData(encodedData);
+            const markdown = await this.convertImaToMarkdown(imaData);
 
             if (!markdown) {
                 throw new Error("IMA 内容为空");
@@ -285,8 +237,13 @@ class ImaEnhancedPastePlugin extends Plugin {
                 new Notice(
                     "已按 IMA 格式粘贴；" +
                     this.imageFailureCount +
-                    " 张图片下载失败，" +
-                    "已保留临时网络链接"
+                    " 张图片下载失败，已保留临时网络链接"
+                );
+            } else if (this.tableCount > 0) {
+                new Notice(
+                    "已按 IMA 格式粘贴；表格已尽量保留，" +
+                    "但在 Obsidian 中为静态 HTML 表格，" +
+                    "不能像原生表格一样直接交互编辑"
                 );
             } else {
                 new Notice("已按 IMA 格式粘贴");
@@ -297,33 +254,23 @@ class ImaEnhancedPastePlugin extends Plugin {
                 error
             );
 
-            new Notice(
-                "IMA 内容解析失败，未插入内容"
-            );
+            new Notice("IMA 内容解析失败，未插入内容");
         }
     }
 
     async pasteImaTitle(encodedData, event) {
         try {
-            const imaData = this.decodeImaData(
-                encodedData
-            );
-
-            const titleText = this.convertImaToTitleText(
-                imaData
-            );
+            const imaData = this.decodeImaData(encodedData);
+            const titleText = this.convertImaToTitleText(imaData);
 
             if (!titleText) {
                 throw new Error("IMA 标题内容为空");
             }
 
-            const titleElement =
-                this.getInlineTitleElement(event);
+            const titleElement = this.getInlineTitleElement(event);
 
             if (!titleElement) {
-                throw new Error(
-                    "找不到 Obsidian 内联标题输入区域"
-                );
+                throw new Error("找不到 Obsidian 内联标题输入区域");
             }
 
             titleElement.focus();
@@ -332,13 +279,10 @@ class ImaEnhancedPastePlugin extends Plugin {
                 titleElement instanceof HTMLInputElement ||
                 titleElement instanceof HTMLTextAreaElement
             ) {
-                const start =
-                    titleElement.selectionStart ??
+                const start = titleElement.selectionStart ??
                     titleElement.value.length;
 
-                const end =
-                    titleElement.selectionEnd ??
-                    start;
+                const end = titleElement.selectionEnd ?? start;
 
                 titleElement.setRangeText(
                     titleText,
@@ -348,9 +292,7 @@ class ImaEnhancedPastePlugin extends Plugin {
                 );
 
                 titleElement.dispatchEvent(
-                    new Event("input", {
-                        bubbles: true
-                    })
+                    new Event("input", { bubbles: true })
                 );
             } else {
                 const inserted = document.execCommand(
@@ -360,72 +302,21 @@ class ImaEnhancedPastePlugin extends Plugin {
                 );
 
                 if (!inserted) {
-                    const selection =
-                        window.getSelection();
-
-                    if (
-                        !selection ||
-                        selection.rangeCount === 0
-                    ) {
-                        throw new Error(
-                            "无法取得标题选区"
-                        );
-                    }
-
-                    const range =
-                        selection.getRangeAt(0);
-
-                    range.deleteContents();
-
-                    const textNode =
-                        document.createTextNode(
-                            titleText
-                        );
-
-                    range.insertNode(textNode);
-                    range.setStartAfter(textNode);
-                    range.collapse(true);
-
-                    selection.removeAllRanges();
-                    selection.addRange(range);
-
-                    titleElement.dispatchEvent(
-                        new InputEvent("input", {
-                            bubbles: true,
-                            inputType: "insertText",
-                            data: titleText
-                        })
-                    );
+                    throw new Error("无法将文字插入标题");
                 }
             }
 
-            new Notice(
-                "已按 IMA 格式粘贴到标题"
-            );
+            new Notice("已按 IMA 格式粘贴到标题");
         } catch (error) {
-            console.error(
-                "IMA title paste failed:",
-                error
-            );
-
-            new Notice(
-                "IMA 内容无法粘贴到标题"
-            );
+            console.error("IMA title paste failed:", error);
+            new Notice("IMA 内容无法粘贴到标题");
         }
     }
 
     convertImaToTitleText(nodes) {
-        const parts = [];
-
-        for (const node of nodes) {
-            const text = this.extractPlainText(node);
-
-            if (text) {
-                parts.push(text);
-            }
-        }
-
-        return parts
+        return nodes
+            .map((node) => this.extractPlainText(node))
+            .filter(Boolean)
             .join(" ")
             .replace(/\s+/g, " ")
             .trim();
@@ -438,7 +329,8 @@ class ImaEnhancedPastePlugin extends Plugin {
 
         if (
             node.type === "cloud_image" ||
-            node.type === "image"
+            node.type === "image" ||
+            node.type === "inline_equation"
         ) {
             return "";
         }
@@ -452,9 +344,7 @@ class ImaEnhancedPastePlugin extends Plugin {
         }
 
         return node.children
-            .map((child) => {
-                return this.extractPlainText(child);
-            })
+            .map((child) => this.extractPlainText(child))
             .join("");
     }
 
@@ -465,25 +355,17 @@ class ImaEnhancedPastePlugin extends Plugin {
                 let encodedData = null;
 
                 for (const item of clipboardItems) {
-                    if (
-                        item.types.includes(
-                            IMA_MIME_TYPE
-                        )
-                    ) {
-                        const blob = await item.getType(
-                            IMA_MIME_TYPE
-                        );
-
-                        encodedData = await blob.text();
-                        break;
+                    if (!item.types.includes(IMA_MIME_TYPE)) {
+                        continue;
                     }
+
+                    const blob = await item.getType(IMA_MIME_TYPE);
+                    encodedData = await blob.text();
+                    break;
                 }
 
                 if (!encodedData) {
-                    new Notice(
-                        "当前剪贴板中没有 IMA 内容"
-                    );
-
+                    new Notice("当前剪贴板中没有 IMA 内容");
                     return;
                 }
 
@@ -504,9 +386,7 @@ class ImaEnhancedPastePlugin extends Plugin {
                     error
                 );
 
-                new Notice(
-                    "读取 IMA 剪贴板失败"
-                );
+                new Notice("读取 IMA 剪贴板失败");
             });
     }
 
@@ -514,23 +394,17 @@ class ImaEnhancedPastePlugin extends Plugin {
         let decodedText = encodedData;
 
         try {
-            decodedText = this.decodeBase64Utf8(
-                decodedText
-            );
+            decodedText = this.decodeBase64Utf8(decodedText);
         } catch (error) {
             decodedText = encodedData;
         }
 
-        decodedText = decodeURIComponent(
-            decodedText
-        );
+        decodedText = decodeURIComponent(decodedText);
 
         const data = JSON.parse(decodedText);
 
         if (!Array.isArray(data)) {
-            throw new Error(
-                "IMA 数据不是节点数组"
-            );
+            throw new Error("IMA 数据不是节点数组");
         }
 
         return data;
@@ -538,36 +412,24 @@ class ImaEnhancedPastePlugin extends Plugin {
 
     decodeBase64Utf8(value) {
         const binary = atob(value);
-        const bytes = new Uint8Array(
-            binary.length
-        );
+        const bytes = new Uint8Array(binary.length);
 
-        for (
-            let index = 0;
-            index < binary.length;
-            index++
-        ) {
+        for (let index = 0; index < binary.length; index++) {
             bytes[index] = binary.charCodeAt(index);
         }
 
-        return new TextDecoder("utf-8").decode(
-            bytes
-        );
+        return new TextDecoder("utf-8").decode(bytes);
     }
 
     async convertImaToMarkdown(nodes) {
         const blocks = [];
 
         for (const node of nodes) {
-            const block = await this.renderBlock(
-                node
-            );
+            const block = await this.renderBlock(node);
 
-            if (block === null) {
-                continue;
+            if (block !== null) {
+                blocks.push(block);
             }
-
-            blocks.push(block);
         }
 
         while (
@@ -586,78 +448,70 @@ class ImaEnhancedPastePlugin extends Plugin {
         }
 
         const type = node.type || "p";
-
         const children = Array.isArray(node.children)
             ? node.children
             : [];
 
         if (type === "cloud_image") {
-            return await this.renderCloudImage(node);
+            return this.renderCloudImage(node);
         }
 
         if (type === "cursor-side") {
-            return await this.renderChildren(children);
+            return this.renderChildren(children);
         }
 
-        const isEmptyBlock =
-            children.length === 0 ||
-            children.every((child) => {
-                return (
-                    child &&
-                    typeof child === "object" &&
-                    typeof child.text === "string" &&
-                    child.text.length === 0
-                );
-            });
+        if (type === "table") {
+            return this.renderTable(node);
+        }
 
-        if (isEmptyBlock) {
+        if (type === "hr") {
+            return "---";
+        }
+
+        if (type === "code_block") {
+            return this.renderCodeBlock(node);
+        }
+
+        if (type === "action_item") {
+            return this.renderActionItem(node);
+        }
+
+        if (type === "inline_equation") {
             return "";
         }
 
-        const content = await this.renderChildren(
-            children
-        );
+        if (type === "tr" || type === "td") {
+            return this.renderChildren(children);
+        }
+
+        const content = await this.renderChildren(children);
+
+        if (!content && children.length === 0) {
+            return "";
+        }
 
         if (type === "h1") {
-            return "# " +
-                this.removeLeadingHeadingMarks(
-                    content
-                );
+            return "# " + this.removeLeadingHeadingMarks(content);
         }
 
         if (type === "h2") {
-            return "## " +
-                this.removeLeadingHeadingMarks(
-                    content
-                );
+            return "## " + this.removeLeadingHeadingMarks(content);
         }
 
         if (type === "h3") {
-            return "### " +
-                this.removeLeadingHeadingMarks(
-                    content
-                );
+            return "### " + this.removeLeadingHeadingMarks(content);
         }
 
         if (type === "h4") {
-            return "#### " +
-                this.removeLeadingHeadingMarks(
-                    content
-                );
+            return "#### " + this.removeLeadingHeadingMarks(content);
         }
 
         if (type === "h5") {
-            return "##### " +
-                this.removeLeadingHeadingMarks(
-                    content
-                );
+            return "##### " + this.removeLeadingHeadingMarks(content);
         }
 
         if (type === "h6") {
-            return "###### " +
-                this.removeLeadingHeadingMarks(
-                    content
-                );
+            return "###### " + this.removeLeadingHeadingMarks(content);
         }
 
         if (type === "blockquote") {
@@ -667,24 +521,30 @@ class ImaEnhancedPastePlugin extends Plugin {
                 .join("\n");
         }
 
-        if (type === "li") {
-            return "- " + content;
+        if (node.listStyleType === "disc") {
+            return this.renderListItem(node, "-", content);
         }
 
-        if (type === "ul" || type === "ol") {
-            return content;
+        if (node.listStyleType === "decimal") {
+            const number = Number.isFinite(node.listStart)
+                ? node.listStart
+                : 1;
+
+            return this.renderListItem(
+                node,
+                number + ".",
+                content
+            );
         }
 
-        return content;
+        return this.applyBlockAlignment(content, node.align);
     }
 
     async renderChildren(children) {
         let content = "";
 
         for (const child of children) {
-            content += await this.renderInline(
-                child
-            );
+            content += await this.renderInline(child);
         }
 
         return content;
@@ -696,77 +556,461 @@ class ImaEnhancedPastePlugin extends Plugin {
         }
 
         if (node.type === "cloud_image") {
-            return await this.renderCloudImage(node);
+            return this.renderCloudImage(node);
+        }
+
+        if (node.type === "inline_equation") {
+            return "";
+        }
+
+        if (node.type === "code_line") {
+            return this.renderChildren(
+                Array.isArray(node.children) ? node.children : []
+            );
         }
 
         if (node.type === "a") {
-            const children = Array.isArray(
-                node.children
-            )
+            const children = Array.isArray(node.children)
                 ? node.children
                 : [];
 
-            const label = await this.renderChildren(
-                children
-            );
-
+            const label = await this.renderChildren(children);
             const url = typeof node.url === "string"
                 ? node.url
                 : "";
 
             if (!url) {
-                return label;
+                return this.applyInlineStyles(label, node);
             }
 
-            return "[" + label + "](" +
-                this.escapeLinkUrl(url) +
-                ")";
+            return this.applyInlineStyles(
+                "[" + label + "](" + this.escapeLinkUrl(url) + ")",
+                node
+            );
+        }
+
+        let content = "";
+
+        if (Array.isArray(node.children)) {
+            content = await this.renderChildren(node.children);
+        } else if (typeof node.text === "string") {
+            content = this.normalizeTextLineBreaks(node.text);
+        }
+
+        return this.applyInlineStyles(content, node);
+    }
+
+    async renderTable(tableNode) {
+        this.tableCount = (this.tableCount || 0) + 1;
+
+        const rows = this.findNodesByType(
+            tableNode.children || [],
+            "tr"
+        );
+
+        if (rows.length === 0) {
+            return "";
+        }
+
+        const colSizes = Array.isArray(tableNode.colSizes)
+            ? tableNode.colSizes
+            : [];
+
+        const columns = colSizes.map((width) => {
+            const size = Number(width);
+
+            if (!Number.isFinite(size) || size <= 0) {
+                return "<col>";
+            }
+
+            return "<col style=\"width:" +
+                size +
+                "px;\">";
+        });
+
+        const renderedRows = [];
+
+        for (const row of rows) {
+            const cells = Array.isArray(row.children)
+                ? row.children.filter((child) => {
+                    return child && child.type === "td";
+                })
+                : [];
+
+            const renderedCells = [];
+
+            for (const cell of cells) {
+                const cellContent =
+                    await this.renderTableCell(cell);
+
+                renderedCells.push(
+                    "<td>" + cellContent + "</td>"
+                );
+            }
+
+            let rowStyle = "";
+            const rowHeight = Number(row.size);
+
+            if (Number.isFinite(rowHeight) && rowHeight > 0) {
+                rowStyle =
+                    " style=\"height:" +
+                    rowHeight +
+                    "px;\"";
+            }
+
+            renderedRows.push(
+                "<tr" +
+                rowStyle +
+                ">" +
+                renderedCells.join("") +
+                "</tr>"
+            );
+        }
+
+        const parts = ["<table>"];
+
+        if (columns.length > 0) {
+            parts.push("<colgroup>");
+            parts.push(columns.join(""));
+            parts.push("</colgroup>");
+        }
+
+        parts.push("<tbody>");
+        parts.push(renderedRows.join("\n"));
+        parts.push("</tbody>");
+        parts.push("</table>");
+
+        return parts.join("\n");
+    }
+
+    findNodesByType(nodes, type) {
+        const found = [];
+
+        for (const node of nodes) {
+            if (!node || typeof node !== "object") {
+                continue;
+            }
+
+            if (node.type === type) {
+                found.push(node);
+                continue;
+            }
+
+            if (Array.isArray(node.children)) {
+                found.push(
+                    ...this.findNodesByType(node.children, type)
+                );
+            }
+        }
+
+        return found;
+    }
+
+    async renderTableCell(cellNode) {
+        const children = Array.isArray(cellNode.children)
+            ? cellNode.children
+            : [];
+
+        const parts = [];
+
+        for (const child of children) {
+            if (!child || typeof child !== "object") {
+                continue;
+            }
+
+            const content = await this.renderTableInline(child);
+
+            if (content) {
+                parts.push(content);
+            }
+        }
+
+        /*
+         * 空单元格使用不换行空格占位。
+         * 这样 Obsidian 不会把它压缩成极细的空行。
+         */
+        if (parts.length === 0) {
+            return "&nbsp;";
+        }
+
+        return parts.join("<br>");
+    }
+
+    async renderTableInline(node) {
+        if (!node || typeof node !== "object") {
+            return "";
+        }
+
+        if (node.type === "cloud_image") {
+            return this.renderCloudImage(node);
+        }
+
+        if (node.type === "inline_equation") {
+            return "";
+        }
+
+        if (node.type === "a") {
+            const children = Array.isArray(node.children)
+                ? node.children
+                : [];
+
+            const label = await this.renderTableChildren(children);
+            const url = typeof node.url === "string"
+                ? node.url
+                : "";
+
+            if (!url) {
+                return this.applyTableInlineStyles(label, node);
+            }
+
+            const link =
+                "<a href=\"" +
+                this.escapeHtmlAttribute(url) +
+                "\">" +
+                label +
+                "</a>";
+
+            return this.applyTableInlineStyles(link, node);
         }
 
         if (Array.isArray(node.children)) {
-            return await this.renderChildren(
+            const content = await this.renderTableChildren(
                 node.children
             );
+
+            return this.applyTableInlineStyles(content, node);
         }
 
         if (typeof node.text !== "string") {
             return "";
         }
 
-        let text = node.text;
+        const text = this.escapeHtml(node.text)
+            .replace(/\r\n/g, "<br>")
+            .replace(/\r/g, "<br>")
+            .replace(/\n/g, "<br>");
 
-        text = text.replace(
-            /\r\n/g,
-            "\n"
-        );
+        return this.applyTableInlineStyles(text, node);
+    }
 
-        text = text.replace(
-            /\r/g,
-            "\n"
-        );
+    async renderTableChildren(children) {
+        let content = "";
 
-        text = text.replace(
-            /\n/g,
-            "  \n"
-        );
+        for (const child of children) {
+            content += await this.renderTableInline(child);
+        }
 
-        if (node.bold && node.italic) {
-            text = "***" + text + "***";
-        } else if (node.bold) {
-            text = "**" + text + "**";
-        } else if (node.italic) {
-            text = "*" + text + "*";
+        return content;
+    }
+
+    applyTableInlineStyles(content, node) {
+        if (!content) {
+            return "";
+        }
+
+        let result = content;
+
+        if (node.bold) {
+            result = "<strong>" + result + "</strong>";
+        }
+
+        if (node.italic) {
+            result = "<em>" + result + "</em>";
         }
 
         if (node.underline) {
-            text = "<u>" + text + "</u>";
+            result = "<u>" + result + "</u>";
         }
 
         if (node.strikethrough) {
-            text = "~~" + text + "~~";
+            result = "<s>" + result + "</s>";
         }
 
-        return text;
+        const backgroundColor = this.getUsableColor(
+            node.backgroundColor,
+            true
+        );
+
+        if (backgroundColor) {
+            result =
+                "<mark style=\"background-color:" +
+                this.escapeHtmlAttribute(backgroundColor) +
+                ";\">" +
+                result +
+                "</mark>";
+        }
+
+        const color = this.getUsableColor(node.color, false);
+
+        if (color) {
+            result =
+                "<span style=\"color:" +
+                this.escapeHtmlAttribute(color) +
+                ";\">" +
+                result +
+                "</span>";
+        }
+
+        return result;
+    }
+
+    async renderCodeBlock(node) {
+        const codeLines = this.findNodesByType(
+            node.children || [],
+            "code_line"
+        );
+
+        let code = "";
+
+        if (codeLines.length > 0) {
+            const lines = [];
+
+            for (const line of codeLines) {
+                lines.push(this.extractPlainText(line));
+            }
+
+            code = lines.join("\n");
+        } else {
+            code = this.extractPlainText(node);
+        }
+
+        return "```\n" + code + "\n```";
+    }
+
+    async renderActionItem(node) {
+        const content = await this.renderChildren(
+            Array.isArray(node.children) ? node.children : []
+        );
+
+        const indent = Number.isFinite(node.indent)
+            ? "    ".repeat(Math.max(0, node.indent - 1))
+            : "";
+
+        const checked = node.checked ? "x" : " ";
+
+        return indent + "- [" + checked + "] " + content;
+    }
+
+    renderListItem(node, marker, content) {
+        const indent = Number.isFinite(node.indent)
+            ? "    ".repeat(Math.max(0, node.indent - 1))
+            : "";
+
+        return indent + marker + " " + content;
+    }
+
+    normalizeTextLineBreaks(text) {
+        return text
+            .replace(/\r\n/g, "\n")
+            .replace(/\r/g, "\n")
+            .replace(/\n/g, "  \n");
+    }
+
+    applyInlineStyles(content, node) {
+        if (!content) {
+            return "";
+        }
+
+        let result = content;
+
+        if (node.bold) {
+            result = "**" + result + "**";
+        }
+
+        if (node.italic) {
+            result = "*" + result + "*";
+        }
+
+        if (node.underline) {
+            result = "<u>" + result + "</u>";
+        }
+
+        if (node.strikethrough) {
+            result = "~~" + result + "~~";
+        }
+
+        const backgroundColor = this.getUsableColor(
+            node.backgroundColor,
+            true
+        );
+
+        if (backgroundColor) {
+            result =
+                "<mark style=\"background-color: " +
+                this.escapeHtmlAttribute(backgroundColor) +
+                ";\">" +
+                result +
+                "</mark>";
+        }
+
+        const color = this.getUsableColor(node.color, false);
+
+        if (color) {
+            result =
+                "<span style=\"color: " +
+                this.escapeHtmlAttribute(color) +
+                ";\">" +
+                result +
+                "</span>";
+        }
+
+        return result;
+    }
+
+    getUsableColor(color, isBackground) {
+        if (typeof color !== "string") {
+            return "";
+        }
+
+        const normalized = color.trim();
+
+        if (!normalized) {
+            return "";
+        }
+
+        if (isBackground) {
+            if (normalized === "var(--common_color_yellow)") {
+                return "#ffcc1a";
+            }
+
+            return normalized;
+        }
+
+        const ignoredTextColors = [
+            "#1a1a1a",
+            "#000000",
+            "black"
+        ];
+
+        if (
+            ignoredTextColors.includes(
+                normalized.toLowerCase()
+            )
+        ) {
+            return "";
+        }
+
+        return normalized;
+    }
+
+    applyBlockAlignment(content, align) {
+        const alignments = {
+            center: "center",
+            right: "right",
+            justify: "justify"
+        };
+
+        if (!alignments[align]) {
+            return content;
+        }
+
+        return (
+            "<div style=\"text-align: " +
+            alignments[align] +
+            ";\">\n" +
+            content +
+            "\n</div>"
+        );
     }
 
     async renderCloudImage(node) {
@@ -777,34 +1021,26 @@ class ImaEnhancedPastePlugin extends Plugin {
         if (!url) {
             this.imageFailureCount += 1;
 
-            return "> [!warning] " +
-                "IMA 图片没有可用地址";
+            return "> [!warning] IMA 图片没有可用地址";
         }
 
         try {
-            const imagePath =
-                await this.downloadImage(url);
+            const imagePath = await this.downloadImage(url);
 
             return "![" +
                 this.escapeMarkdownAlt("IMA 图片") +
                 "](" +
                 this.escapeLinkUrl(
-                    this.app.vault.adapter
-                        .getResourcePath(imagePath)
+                    this.app.vault.adapter.getResourcePath(imagePath)
                 ) +
                 ")";
         } catch (error) {
-            console.error(
-                "IMA image download failed:",
-                error
-            );
+            console.error("IMA image download failed:", error);
 
             this.imageFailureCount += 1;
 
             return "![" +
-                this.escapeMarkdownAlt(
-                    "IMA 图片（下载失败）"
-                ) +
+                this.escapeMarkdownAlt("IMA 图片（下载失败）") +
                 "](" +
                 this.escapeLinkUrl(url) +
                 ")";
@@ -814,25 +1050,15 @@ class ImaEnhancedPastePlugin extends Plugin {
     async downloadImage(url) {
         await this.ensureImageFolder();
 
-        const extension = this.getImageExtension(
+        const extension = this.getImageExtension(url, "");
+        const fileName = await this.createImageFileName(
             url,
-            ""
+            extension
         );
 
-        const fileName =
-            await this.createImageFileName(
-                url,
-                extension
-            );
+        const imagePath = IMAGE_FOLDER + "/" + fileName;
 
-        const imagePath =
-            IMAGE_FOLDER + "/" + fileName;
-
-        if (
-            await this.app.vault.adapter.exists(
-                imagePath
-            )
-        ) {
+        if (await this.app.vault.adapter.exists(imagePath)) {
             return imagePath;
         }
 
@@ -853,45 +1079,31 @@ class ImaEnhancedPastePlugin extends Plugin {
     async ensureImageFolder() {
         const adapter = this.app.vault.adapter;
 
-        if (
-            await adapter.exists(IMAGE_FOLDER)
-        ) {
+        if (await adapter.exists(IMAGE_FOLDER)) {
             return;
         }
 
         try {
-            await this.app.vault.createFolder(
-                IMAGE_FOLDER
-            );
+            await this.app.vault.createFolder(IMAGE_FOLDER);
         } catch (error) {
-            if (
-                !(await adapter.exists(
-                    IMAGE_FOLDER
-                ))
-            ) {
+            if (!(await adapter.exists(IMAGE_FOLDER))) {
                 throw error;
             }
         }
     }
 
     async createImageFileName(url, extension) {
-        const stableUrl =
-            this.getStableImageUrl(url);
-
+        const stableUrl = this.getStableImageUrl(url);
         const hash = this.hashText(stableUrl);
 
-        return "ima-image-" +
-            hash +
-            "." +
-            extension;
+        return "ima-image-" + hash + "." + extension;
     }
 
     getStableImageUrl(url) {
         try {
             const parsedUrl = new URL(url);
 
-            return parsedUrl.origin +
-                parsedUrl.pathname;
+            return parsedUrl.origin + parsedUrl.pathname;
         } catch (error) {
             return String(url).split("?")[0];
         }
@@ -900,16 +1112,9 @@ class ImaEnhancedPastePlugin extends Plugin {
     hashText(text) {
         let hash = 2166136261;
 
-        for (
-            let index = 0;
-            index < text.length;
-            index++
-        ) {
+        for (let index = 0; index < text.length; index++) {
             hash ^= text.charCodeAt(index);
-            hash = Math.imul(
-                hash,
-                16777619
-            );
+            hash = Math.imul(hash, 16777619);
         }
 
         return (hash >>> 0)
@@ -918,14 +1123,12 @@ class ImaEnhancedPastePlugin extends Plugin {
     }
 
     getImageExtension(url, contentType) {
-        const normalizedType = String(
-            contentType || ""
-        )
+        const normalizedType = String(contentType || "")
             .toLowerCase()
             .split(";")[0]
             .trim();
 
-        const contentTypeExtensions = {
+        const extensions = {
             "image/jpeg": "jpg",
             "image/jpg": "jpg",
             "image/png": "png",
@@ -935,20 +1138,12 @@ class ImaEnhancedPastePlugin extends Plugin {
             "image/svg+xml": "svg"
         };
 
-        if (
-            contentTypeExtensions[
-                normalizedType
-            ]
-        ) {
-            return contentTypeExtensions[
-                normalizedType
-            ];
+        if (extensions[normalizedType]) {
+            return extensions[normalizedType];
         }
 
         try {
-            const pathname = new URL(url)
-                .pathname;
-
+            const pathname = new URL(url).pathname;
             const match = pathname.match(
                 /\.([a-zA-Z0-9]{2,5})$/
             );
@@ -967,10 +1162,7 @@ class ImaEnhancedPastePlugin extends Plugin {
     }
 
     removeLeadingHeadingMarks(text) {
-        return text.replace(
-            /^[#\s]+/,
-            ""
-        );
+        return text.replace(/^[#\s]+/, "");
     }
 
     escapeLinkUrl(url) {
@@ -983,6 +1175,18 @@ class ImaEnhancedPastePlugin extends Plugin {
         return String(text)
             .replace(/\[/g, "\\[")
             .replace(/\]/g, "\\]");
+    }
+
+    escapeHtml(text) {
+        return String(text)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+    }
+
+    escapeHtmlAttribute(text) {
+        return this.escapeHtml(text);
     }
 }
 
