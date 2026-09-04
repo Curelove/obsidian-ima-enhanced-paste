@@ -399,7 +399,14 @@ class ImaEnhancedPastePlugin extends Plugin {
             decodedText = encodedData;
         }
 
-        decodedText = decodeURIComponent(decodedText);
+        try {
+            decodedText = decodeURIComponent(decodedText);
+        } catch (error) {
+            console.warn(
+                "IMA 数据 URL 解码失败，继续尝试解析原始内容:",
+                error
+            );
+        }
 
         const data = JSON.parse(decodedText);
 
@@ -583,10 +590,14 @@ class ImaEnhancedPastePlugin extends Plugin {
                 return this.applyInlineStyles(label, node);
             }
 
-            return this.applyInlineStyles(
-                "[" + label + "](" + this.escapeLinkUrl(url) + ")",
-                node
-            );
+            const link =
+                "<a href=\"" +
+                this.escapeHtmlAttribute(url) +
+                "\">" +
+                label +
+                "</a>";
+
+            return this.applyInlineStyles(link, node);
         }
 
         let content = "";
@@ -612,10 +623,7 @@ class ImaEnhancedPastePlugin extends Plugin {
             return "";
         }
 
-        const colSizes = Array.isArray(tableNode.colSizes)
-            ? tableNode.colSizes
-            : [];
-
+        const colSizes = this.getTableColumnSizes(tableNode);
         const columns = colSizes.map((width) => {
             const size = Number(width);
 
@@ -649,7 +657,7 @@ class ImaEnhancedPastePlugin extends Plugin {
             }
 
             let rowStyle = "";
-            const rowHeight = Number(row.size);
+            const rowHeight = this.getTableRowHeight(row);
 
             if (Number.isFinite(rowHeight) && rowHeight > 0) {
                 rowStyle =
@@ -681,6 +689,52 @@ class ImaEnhancedPastePlugin extends Plugin {
         parts.push("</table>");
 
         return parts.join("\n");
+    }
+
+    getTableColumnSizes(tableNode) {
+        const candidates = [
+            tableNode.colSizes,
+            tableNode.colWidths,
+            tableNode.columnWidths,
+            tableNode.widths
+        ];
+
+        for (const candidate of candidates) {
+            if (Array.isArray(candidate)) {
+                return candidate;
+            }
+
+            if (typeof candidate === "string") {
+                const values = candidate
+                    .split(/[,\s]+/)
+                    .map((value) => Number(value))
+                    .filter((value) => Number.isFinite(value));
+
+                if (values.length > 0) {
+                    return values;
+                }
+            }
+        }
+
+        return [];
+    }
+
+    getTableRowHeight(row) {
+        const candidates = [
+            row.size,
+            row.height,
+            row.rowHeight
+        ];
+
+        for (const candidate of candidates) {
+            const value = Number(candidate);
+
+            if (Number.isFinite(value) && value > 0) {
+                return value;
+            }
+        }
+
+        return 0;
     }
 
     findNodesByType(nodes, type) {
@@ -725,10 +779,6 @@ class ImaEnhancedPastePlugin extends Plugin {
             }
         }
 
-        /*
-         * 空单元格使用不换行空格占位。
-         * 这样 Obsidian 不会把它压缩成极细的空行。
-         */
         if (parts.length === 0) {
             return "&nbsp;";
         }
@@ -804,54 +854,7 @@ class ImaEnhancedPastePlugin extends Plugin {
     }
 
     applyTableInlineStyles(content, node) {
-        if (!content) {
-            return "";
-        }
-
-        let result = content;
-
-        if (node.bold) {
-            result = "<strong>" + result + "</strong>";
-        }
-
-        if (node.italic) {
-            result = "<em>" + result + "</em>";
-        }
-
-        if (node.underline) {
-            result = "<u>" + result + "</u>";
-        }
-
-        if (node.strikethrough) {
-            result = "<s>" + result + "</s>";
-        }
-
-        const backgroundColor = this.getUsableColor(
-            node.backgroundColor,
-            true
-        );
-
-        if (backgroundColor) {
-            result =
-                "<mark style=\"background-color:" +
-                this.escapeHtmlAttribute(backgroundColor) +
-                ";\">" +
-                result +
-                "</mark>";
-        }
-
-        const color = this.getUsableColor(node.color, false);
-
-        if (color) {
-            result =
-                "<span style=\"color:" +
-                this.escapeHtmlAttribute(color) +
-                ";\">" +
-                result +
-                "</span>";
-        }
-
-        return result;
+        return this.applyHtmlInlineStyles(content, node);
     }
 
     async renderCodeBlock(node) {
@@ -903,22 +906,30 @@ class ImaEnhancedPastePlugin extends Plugin {
         return text
             .replace(/\r\n/g, "\n")
             .replace(/\r/g, "\n")
-            .replace(/\n/g, "  \n");
+            .replace(/\n/g, "<br>");
     }
 
     applyInlineStyles(content, node) {
+        return this.applyHtmlInlineStyles(content, node);
+    }
+
+    applyHtmlInlineStyles(content, node) {
         if (!content) {
             return "";
         }
 
         let result = content;
 
+        /*
+         * 使用 HTML 标签而不是 Markdown 的 **、*、~~。
+         * 这样可以避免中文标点后出现孤立的 Markdown 标记。
+         */
         if (node.bold) {
-            result = "**" + result + "**";
+            result = "<strong>" + result + "</strong>";
         }
 
         if (node.italic) {
-            result = "*" + result + "*";
+            result = "<em>" + result + "</em>";
         }
 
         if (node.underline) {
@@ -926,7 +937,7 @@ class ImaEnhancedPastePlugin extends Plugin {
         }
 
         if (node.strikethrough) {
-            result = "~~" + result + "~~";
+            result = "<s>" + result + "</s>";
         }
 
         const backgroundColor = this.getUsableColor(
@@ -936,18 +947,21 @@ class ImaEnhancedPastePlugin extends Plugin {
 
         if (backgroundColor) {
             result =
-                "<mark style=\"background-color: " +
+                "<mark style=\"background-color:" +
                 this.escapeHtmlAttribute(backgroundColor) +
                 ";\">" +
                 result +
                 "</mark>";
         }
 
-        const color = this.getUsableColor(node.color, false);
+        const color = this.getUsableColor(
+            node.color,
+            false
+        );
 
         if (color) {
             result =
-                "<span style=\"color: " +
+                "<span style=\"color:" +
                 this.escapeHtmlAttribute(color) +
                 ";\">" +
                 result +
@@ -968,29 +982,270 @@ class ImaEnhancedPastePlugin extends Plugin {
             return "";
         }
 
-        if (isBackground) {
-            if (normalized === "var(--common_color_yellow)") {
-                return "#ffcc1a";
-            }
+        const variableColors = {
+            "var(--common_color_yellow)": "#FFCC1A"
+        };
 
-            return normalized;
+        if (variableColors[normalized]) {
+            return variableColors[normalized];
         }
 
-        const ignoredTextColors = [
-            "#1a1a1a",
-            "#000000",
-            "black"
-        ];
-
         if (
-            ignoredTextColors.includes(
-                normalized.toLowerCase()
-            )
+            normalized.startsWith("var(") &&
+            normalized.endsWith(")")
         ) {
             return "";
         }
 
-        return normalized;
+        const shortHex = normalized.match(
+            /^#([0-9a-fA-F]{3})$/
+        );
+
+        if (shortHex) {
+            return this.expandShortHexColor(normalized);
+        }
+
+        if (/^#[0-9a-fA-F]{6}$/.test(normalized)) {
+            return normalized.toUpperCase();
+        }
+
+        const hex8 = this.convertHex8ToRgba(normalized);
+
+        if (hex8) {
+            return hex8;
+        }
+
+        const rgb = this.normalizeRgbColor(normalized);
+
+        if (rgb) {
+            return rgb;
+        }
+
+        const hsl = this.normalizeHslColor(normalized);
+
+        if (hsl) {
+            return hsl;
+        }
+
+        const namedColors = [
+            "red",
+            "orange",
+            "yellow",
+            "green",
+            "blue",
+            "purple",
+            "pink",
+            "gray",
+            "grey",
+            "black",
+            "white"
+        ];
+
+        if (
+            namedColors.includes(
+                normalized.toLowerCase()
+            )
+        ) {
+            return normalized.toLowerCase();
+        }
+
+        return "";
+    }
+
+    expandShortHexColor(color) {
+        const red = color.charAt(1);
+        const green = color.charAt(2);
+        const blue = color.charAt(3);
+
+        return (
+            "#" +
+            red + red +
+            green + green +
+            blue + blue
+        ).toUpperCase();
+    }
+
+    convertHex8ToRgba(color) {
+        const match = color.match(
+            /^#([0-9a-fA-F]{8})$/
+        );
+
+        if (!match) {
+            return "";
+        }
+
+        const hex = match[1];
+
+        const red = parseInt(hex.slice(0, 2), 16);
+        const green = parseInt(hex.slice(2, 4), 16);
+        const blue = parseInt(hex.slice(4, 6), 16);
+        const alpha = parseInt(hex.slice(6, 8), 16) / 255;
+
+        if (alpha >= 0.999) {
+            return (
+                "#" +
+                hex.slice(0, 6)
+            ).toUpperCase();
+        }
+
+        return (
+            "rgba(" +
+            red +
+            ", " +
+            green +
+            ", " +
+            blue +
+            ", " +
+            alpha.toFixed(3) +
+            ")"
+        );
+    }
+
+    normalizeRgbColor(color) {
+        const value = String(color)
+            .trim()
+            .replace(/\s+$/, "");
+
+        const repaired = this.repairRgbColor(value);
+
+        if (!repaired) {
+            return "";
+        }
+
+        const match = repaired.match(
+            /^rgba?\(\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)(?:\s*,\s*([0-9]+(?:\.[0-9]+)?))?\s*\)$/i
+        );
+
+        if (!match) {
+            return "";
+        }
+
+        const red = Number(match[1]);
+        const green = Number(match[2]);
+        const blue = Number(match[3]);
+        const alpha = match[4] === undefined
+            ? 1
+            : Number(match[4]);
+
+        if (
+            !this.isValidRgbChannel(red) ||
+            !this.isValidRgbChannel(green) ||
+            !Number.isFinite(alpha) ||
+            alpha < 0 ||
+            alpha > 1
+        ) {
+            return "";
+        }
+
+        if (alpha >= 0.999) {
+            return this.rgbToHex(red, green, blue);
+        }
+
+        return (
+            "rgba(" +
+            red +
+            ", " +
+            green +
+            ", " +
+            blue +
+            ", " +
+            alpha.toFixed(3) +
+            ")"
+        );
+    }
+
+    repairRgbColor(color) {
+        const value = String(color).trim();
+
+        const completePattern =
+            /^(rgba?)\(\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)(?:\s*,\s*([0-9]+(?:\.[0-9]+)?))?\s*\)$/i;
+
+        if (completePattern.test(value)) {
+            return value;
+        }
+
+        const missingClosingBracket = value.match(
+            /^(rgba?)\(\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*,\s*([0-9]+(?:\.[0-9]+)?)(?:\s*,\s*([0-9]+(?:\.[0-9]+)?))?\s*$/i
+        );
+
+        if (!missingClosingBracket) {
+            return "";
+        }
+
+        return (
+            missingClosingBracket[1] +
+            "(" +
+            missingClosingBracket[2] +
+            ", " +
+            missingClosingBracket[3] +
+            ", " +
+            missingClosingBracket[4] +
+            (
+                missingClosingBracket[5] === undefined
+                    ? ""
+                    : ", " + missingClosingBracket[5]
+            ) +
+            ")"
+        );
+    }
+
+    isValidRgbChannel(value) {
+        return Number.isFinite(value) &&
+            value >= 0 &&
+            value <= 255;
+    }
+
+    rgbToHex(red, green, blue) {
+        const toHex = (value) => {
+            return Math.round(value)
+                .toString(16)
+                .padStart(2, "0");
+        };
+
+        return (
+            "#" +
+            toHex(red) +
+            toHex(green) +
+            toHex(blue)
+        ).toUpperCase();
+    }
+
+    normalizeHslColor(color) {
+        const value = String(color).trim();
+
+        const match = value.match(
+            /^(hsla?)\(\s*([-+]?(?:\d+(?:\.\d+)?))\s*(deg|grad|rad|turn)?\s*,\s*(\d+(?:\.\d+)?)%\s*,\s*(\d+(?:\.\d+)?)%(?:\s*,\s*(0|1|0?\.\d+))?\s*\)$/i
+        );
+
+        if (!match) {
+            return "";
+        }
+
+        const saturation = Number(match[4]);
+        const lightness = Number(match[5]);
+
+        if (
+            !Number.isFinite(saturation) ||
+            !Number.isFinite(lightness) ||
+            saturation < 0 ||
+            saturation > 100 ||
+            lightness < 0 ||
+            lightness > 100
+        ) {
+            return "";
+        }
+
+        if (match[6] === undefined) {
+            return value;
+        }
+
+        const alpha = Number(match[6]);
+
+        if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+            return "";
+        }
+
+        return value;
     }
 
     applyBlockAlignment(content, align) {
@@ -1005,11 +1260,11 @@ class ImaEnhancedPastePlugin extends Plugin {
         }
 
         return (
-            "<div style=\"text-align: " +
+            "<div style=\"text-align:" +
             alignments[align] +
-            ";\">\n" +
+            ";\">" +
             content +
-            "\n</div>"
+            "</div>"
         );
     }
 
