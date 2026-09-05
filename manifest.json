@@ -1,9 +1,9 @@
 {
   "id": "ima-enhanced-paste",
   "name": "IMA Enhanced Paste",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "minAppVersion": "1.5.0",
-  "description": "Reads IMA custom clipboard data and converts it to Obsidian Markdown.",
+  "description": "Converts IMA and HTML clipboard content into Obsidian Markdown or HTML.",
   "author": "苦惹爱",
   "isDesktopOnly": true
 }
